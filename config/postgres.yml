@@ -1,0 +1,4 @@
+user: postgres
+password: postgres
+host: localhost
+database: packet_jyushin_maru_repo
