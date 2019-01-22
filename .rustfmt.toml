@@ -15,3 +15,5 @@ tab_spaces = 3
 
 use_field_init_shorthand = true
 wrap_comments = true
+
+struct_lit_multiline_style = "PreferSingle"

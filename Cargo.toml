@@ -13,3 +13,5 @@ postgres = {version = "0.15", features = ["with-chrono", "with-uuid"] }
 rtp-rs = "0.2"
 log = "0.4"
 env_logger = "*"
+clap = "2"
+directories = "1"

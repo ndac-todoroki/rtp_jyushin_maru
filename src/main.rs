@@ -1,22 +1,13 @@
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::mpsc;
-use std::thread;
-use std::time::SystemTime;
 
-#[macro_use]
-extern crate log;
-
+use clap::*;
 use config;
-
-use postgres;
-use postgres::{Connection, TlsMode};
-
-use chrono::prelude::*;
-use rtp_rs::RtpReader;
+use log::debug;
+use postgres::{self, Connection, TlsMode};
 
 // Local modules
 mod model;
-use self::model::{TestCase, RTP};
+mod workers;
 
 /// Constructs a connection parameter from the config file.
 /// This `panic!`s if failed to read some values.
@@ -40,25 +31,58 @@ fn construct_connection_params(settings: &config::Config) -> postgres::params::C
    params.build(Host::Tcp(settings.get_str("host").unwrap()))
 }
 
-fn main() -> std::io::Result<()> {
+fn main() {
+   use self::workers::{redirect, store};
+   use directories::ProjectDirs;
+
+   let project_dirs = ProjectDirs::from(
+      "org",            /*qualifier*/
+      crate_authors!(), /*organization*/
+      crate_name!(),    /*application*/
+   )
+   .unwrap();
+
    env_logger::init();
 
-   /* Settings */
+   /* Command-line arguments */
 
-   // Get Postgres settings.
-   let mut psql_settings = config::Config::default();
-   match psql_settings.merge(config::File::with_name("config/postgres")) {
-      Ok(_) => println!("OK: Postgres settings read."),
-      Err(err) => {
-         eprintln!("error: {:?}", err);
-         std::process::exit(1);
-      }
+   let mut app = clap_app!((crate_name!()) =>
+      (version: crate_version!())
+      (author: crate_authors!())
+      (about: "AES67 packet receiver. It can store packets to Postgres, or redirect payloads to STDOUT, or else.")
+      (@arg CONFIG: -c --config +takes_value +global "A config file defining the UDP port settings.")
+      (@arg limit: -l --limit +takes_value +global "If set, it only reads the given number of packets and exits.")
+      (@subcommand store =>
+         (about: "Stores packets to Postgres.")
+         (@arg postgres_config: -p --("postgres-config") +required +takes_value "Config file for PostgreSQL")
+      )
+      (@subcommand redirect =>
+         (about: "Redirects packet payload to stdout. Good for pipeline use.")
+      )
+   );
+
+   let matches = app.clone().get_matches();
+
+   // get config
+   let default_config_path = project_dirs
+      .config_dir()
+      .join("udp.yml")
+      .to_string_lossy()
+      .to_string();
+   let udp_config_file_path = matches.value_of("CONFIG").unwrap_or(&default_config_path);
+
+   let packet_limit = match matches.value_of("limit") {
+      Some(limit) => match limit.parse::<usize>() {
+         Ok(limit) => Some(limit),
+         Err(_) => None,
+      },
+      None => None,
    };
 
    // Get udp settings.
    let mut udp_settings = config::Config::default();
-   match udp_settings.merge(config::File::with_name("config/udp")) {
-      Ok(_) => println!("OK: UDP settings read."),
+   match udp_settings.merge(config::File::with_name(udp_config_file_path)) {
+      Ok(_) => debug!("OK: UDP settings read."),
       Err(err) => {
          eprintln!("error: {:?}", err);
          std::process::exit(1);
@@ -66,7 +90,6 @@ fn main() -> std::io::Result<()> {
    };
    let host = udp_settings.get_str("host").unwrap();
    let port = udp_settings.get_int("port").unwrap();
-   let max_packets = udp_settings.get_int("max_packets").unwrap();
    let opponent_addr: Option<SocketAddr> = None;
 
    /* UDP Server */
@@ -74,132 +97,41 @@ fn main() -> std::io::Result<()> {
    let socket = UdpSocket::bind(format!("{}:{}", host, port)).expect("couldn't bind to address");
    debug!("Socket binded correctly to {:?}.", socket);
 
-   let mut buf = [0; 2000];
-
-   /* Postgres */
-
-   // Connect to Postgres
-   let psql_params = construct_connection_params(&psql_settings);
-   let conn = Connection::connect(psql_params, TlsMode::None).unwrap();
-   debug!("connected to Postgres");
-
-   // Create message sender/receiver
-   let (tx, rx) = mpsc::channel();
-   debug!("tx, rx created");
-
-   /* Do. */
-
-   // Create test case: Exit if failed.
-   let current_datetime = Utc::now();
-   let test_case = TestCase {
-      id: uuid::Uuid::new_v4(),
-      name: current_datetime.format("%+").to_string(),
-      inserted_at: current_datetime.naive_utc(),
-      updated_at: current_datetime.naive_utc(),
-   };
-   conn
-      .execute(
-         "INSERT INTO test_cases (id, name, inserted_at, updated_at) VALUES ($1, $2, $3, $4)",
-         &[
-            &test_case.id,
-            &test_case.name,
-            &test_case.inserted_at,
-            &test_case.updated_at,
-         ],
-      )
-      .expect("CREATING TEST CASE FAILED");
-
-   println!("The case name is: {}", test_case.name);
-
-   // Accept UDP packets and store them with timestamp.
-   let handler = thread::spawn(move || {
-      debug!("-- inside thread");
-
-      let mut counter = 0;
-      let system_time = SystemTime::now();
-
-      loop {
-         debug!("loop #{}", counter);
-
-         match socket.recv_from(&mut buf) {
-            Ok((recv_size, src_addr)) => {
-               debug!("OK");
-
-               // Skip if not from ESP32
-               if let Some(opponent_addr) = opponent_addr {
-                  if opponent_addr != src_addr {
-                     continue;
-                  };
-               }
-
-               let timestamp: i32 = system_time.elapsed().unwrap().subsec_micros() as i32;
-               let current_time = Utc::now().naive_utc();
-
-               // FIXME: unsafe
-               let rtp = RtpReader::new(&buf[..recv_size]).unwrap();
-
-               let data = RTP {
-                  id: uuid::Uuid::new_v4(),
-                  serial: counter,
-                  test_case_id: test_case.id,
-                  version: rtp.version() as i32,
-                  padding: rtp.padding(),
-                  extension: rtp.extension(),
-                  csrc_count: rtp.csrc_count() as i32,
-                  marker: rtp.mark(),
-                  payload_type: rtp.payload_type() as i32,
-                  timestamp: rtp.timestamp() as i64,
-                  ssrc: rtp.ssrc() as i32,
-                  payload: rtp.payload().to_vec(),
-                  received_at: timestamp,
-                  inserted_at: current_time,
-                  updated_at: current_time,
-               };
-               tx.send(data).unwrap();
-
-               // update counter if only OK
-               counter = counter + 1;
-            }
-            Err(e) => {
-               debug!("recv function failed: {:?}", e);
-               continue;
+   match matches.subcommand() {
+      ("store", Some(sub_match)) => {
+         let psql_config_file_path = sub_match.value_of("postgres_config").unwrap();
+         // Get Postgres settings.
+         let mut psql_settings = config::Config::default();
+         match psql_settings.merge(config::File::with_name(psql_config_file_path)) {
+            Ok(_) => debug!("OK: Postgres settings read."),
+            Err(err) => {
+               eprintln!("error: {:?}", err);
+               std::process::exit(1);
             }
          };
+         // Connect to Postgres
+         let psql_params = construct_connection_params(&psql_settings);
+         let conn = Connection::connect(psql_params, TlsMode::None).unwrap();
+         debug!("connected to Postgres");
 
-         // end if max packets count
-         if counter >= max_packets {
-            break;
-         };
+         store(
+            socket,
+            conn,
+            FuncOpts {
+               packet_limit,
+               opponent_addr,
+            },
+         );
       }
-   });
-
-   for rtp in rx {
-      // println!("Got: {}", received);
-      debug!("Got: {}", rtp.id);
-      conn.execute(
-            "INSERT INTO rtps (id, serial, test_case_id, version, padding, extension, csrc_count, marker, payload_type, timestamp, ssrc, payload, received_at, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
-            &[
-                &rtp.id,
-                &rtp.serial,
-                &rtp.test_case_id,
-                &rtp.version,
-                &rtp.padding,
-                &rtp.extension,
-                &rtp.csrc_count,
-                &rtp.marker,
-                &rtp.payload_type,
-                &rtp.timestamp,
-                &rtp.ssrc,
-                &rtp.payload,
-                &rtp.received_at,
-                &rtp.inserted_at,
-                &rtp.updated_at,
-            ],
-        ).expect("INSERTING RTP FAILED");
+      ("redirect", Some(_)) => redirect(
+         socket,
+         FuncOpts {
+            packet_limit,
+            opponent_addr,
+         },
+      ),
+      _ => {
+         app.print_help();
+      }
    }
-
-   // wait until all ends
-   handler.join().unwrap();
-
-   Ok(())
 }

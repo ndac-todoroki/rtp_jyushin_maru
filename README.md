@@ -2,13 +2,15 @@
 
 Elixirで書いてたやつをシンプルにしてRustで書き直した
 
-パケットは受信時タイムスタンプを付与してPostgresに保存．
+パケットは受信時タイムスタンプを付与してPostgresに保存可能
+標準出力に流すことでpacatに渡すことも可能
 
 ## 設定ファイル
 
-`config/postgres.yml`, `config/udp.yml` に設定が必要
+udp用，postgres用にそれぞれ設定ファイルが必要
+`.yml`でも`.toml`でも`.ini`でも大丈夫
 
-ymlでもtomlでもiniでも大丈夫
+**デフォルトで(unixの場合) `~/.config/rtp_jyushin_maru/udp.yml` を見に行きます **
 
 ### 例
 #### postgres.yml
@@ -35,7 +37,10 @@ ln -rs target/release/rtp_jyushin_maru
 
 ## 受信．保存
 # テストケース名が表示されるのでそれをメモっておく
-./rtp_jyushin_maru
+./rtp_jyushin_maru store [-c config/udp.yml] [-p config/postgres.yml]
+
+## そのままpacatで再生
+ ./rtp_jyushin_maru redirect -c config/udp.yml | pacat -p --raw --latency=1 --channels=1 --rate=48000 --format=s24be
 
 ## 解析
 # 途中でさっきのを入力
