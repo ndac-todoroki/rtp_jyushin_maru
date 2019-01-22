@@ -1,0 +1,17 @@
+unstable_features = true
+combine_control_expr = false
+fn_single_line = true
+format_strings = true
+imports_indent = "Block"
+imports_layout = "HorizontalVertical"
+match_block_trailing_comma = true
+force_multiline_blocks = true
+
+report_todo = "Unnumbered"
+report_fixme = "Unnumbered"
+
+struct_field_align_threshold = 20
+tab_spaces = 3
+
+use_field_init_shorthand = true
+wrap_comments = true
