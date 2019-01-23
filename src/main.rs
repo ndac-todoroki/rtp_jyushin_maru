@@ -32,7 +32,7 @@ fn construct_connection_params(settings: &config::Config) -> postgres::params::C
 }
 
 fn main() {
-   use self::workers::{redirect, store};
+   use self::workers::{redirect, store, FuncOpts};
    use directories::ProjectDirs;
 
    let project_dirs = ProjectDirs::from(

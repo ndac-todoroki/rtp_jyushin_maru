@@ -3,9 +3,9 @@ use std::net::SocketAddr;
 mod redirect;
 mod store;
 
-struct FuncOpts {
-   packet_limit: Option<usize>,
-   opponent_addr: Option<SocketAddr>,
+pub struct FuncOpts {
+   pub packet_limit: Option<usize>,
+   pub opponent_addr: Option<SocketAddr>,
 }
 
 pub use self::redirect::redirect;

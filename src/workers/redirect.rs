@@ -3,13 +3,16 @@ use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::thread;
 
+use log::debug;
 use rtp_rs::RtpReader;
 
 pub fn redirect(socket: UdpSocket, opts: FuncOpts) {
-   use std::io::{self, Write};
+   use std::io::{self, BufWriter, Write};
 
    let mut buf = [0; 2000];
    let mut stdout = io::stdout();
+   // let stdout = io::stdout();
+   // let mut stdout = BufWriter::new(stdout.lock());
 
    // Create message sender/receiver
    let (tx, rx) = mpsc::channel();
@@ -38,7 +41,7 @@ pub fn redirect(socket: UdpSocket, opts: FuncOpts) {
                // FIXME: unsafe
                let rtp = RtpReader::new(&buf[..recv_size]).unwrap();
 
-               tx.send(rtp.payload().to_vec()).unwrap();
+               tx.send(rtp.payload().to_owned()).unwrap();
 
                // update counter if only OK
                counter = counter + 1;

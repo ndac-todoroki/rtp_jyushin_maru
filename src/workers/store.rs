@@ -4,9 +4,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::SystemTime;
 
-use postgres;
-
 use chrono::prelude::*;
+use log::debug;
+use postgres;
 use rtp_rs::RtpReader;
 
 pub fn store(socket: UdpSocket, conn: postgres::Connection, opts: FuncOpts) {
